@@ -1,0 +1,211 @@
+---
+title: "Auckland Bike data analysis"
+author: "Ghassan Al-A'raj"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(refinr)
+library(plyr)
+library(lubridate)
+library(gridExtra)
+```
+
+#Load data
+```{r message=FALSE}
+#bike data
+bike_files<- list.files("data/BIKES",pattern = ".csv" ,full=TRUE)
+bike_data<-map(bike_files,read_csv)
+bike_tidy<-map(bike_data, pivot_longer, values_to ="rider_count", names_to ="counter", -Date)
+allbikes<-bind_rows(bike_tidy)
+```
+
+```{r message=FALSE, warning=FALSE}
+#rain data
+rain_files<- list.files("data/RAIN",pattern = ".txt" ,full=TRUE)
+rain_data<-map(rain_files,read_csv)
+allrain <- bind_rows(rain_data)
+```
+
+
+Compute the total number of cyclists counted for each day, and a suitable summary of the rainfall for each day, in the same data frame.
+
+#clean the bike data set
+
+```{r message=FALSE}
+#make sure names are consistent and remove NAs in the data set.
+allbikes <- allbikes[!is.na(allbikes$Date) & !is.na(allbikes$counter) & !is.na(allbikes$rider_count),]
+name_table <- read_csv("bikes_done.csv",col_names = TRUE)
+allbikes <- join(allbikes, name_table, by = NULL, type = "left", match = "all")
+
+```
+
+#fix date column
+
+```{r}
+time.data <- t(sapply(allbikes$Date, function(x) substring(x, first=c(1,5,7,11), last=c(4,6,10,15))))
+time.df <- data.frame(wday = time.data[,1],
+                      day = time.data[,2],
+                      month = time.data[,3],
+                      year = time.data[,4])
+
+time.df$month = trimws(time.df$month)
+
+dates <- paste(time.df$year,time.df$month,time.df$day,sep="-")
+
+time.df$date <- strptime(dates , format="%Y-%b-%d", tz = "GMT")
+allbikes$Date <- time.df$date
+```
+#clean the rain data set
+
+```{r}
+allrain$Date <- ymd(allrain$`Date(NZST)`)
+```
+
+```{r message=FALSE, warning=FALSE}
+#sum rain per day
+total.rain <- aggregate(allrain$`Amount(mm)`~ allrain$Date  , data = allrain, sum)
+names(total.rain) <- c("Date", "TotRain")
+
+#now sum rider count per day 
+total.rider <- aggregate( allbikes$rider_count ~ as.Date(allbikes$Date) , data = allbikes, sum)
+names(total.rider) <- c("Date", "TotRider")
+
+
+#now match the two data sets and assign it to a variable
+total.all <- join(total.rider, total.rain, by = NULL, type = "left", match = "all")
+head(total.all)
+```
+
+
+Draw suitable graphs to display how the number of cyclists varies over time, over season, over day of the week, and with rain
+
+
+
+```{r}
+#number of cyclists v.s time(Date)
+
+
+allbikes$week <- week(allbikes$Date)
+
+seventeen <- (year(allbikes$Date) == 2017)
+allbikes$week[seventeen] <- allbikes$week[seventeen] + 52
+eightteen <- (year(allbikes$Date) == 2018)
+allbikes$week[eightteen] <- allbikes$week[eightteen] + 104
+
+
+
+time.bikes <- aggregate(rider_count ~ week + year(Date), data = allbikes, mean)
+names(time.bikes) <- c("week","year", "rider_count")
+
+time.g <- ggplot(data = time.bikes, aes(y = rider_count, x = week, colour = as.factor(year))) + geom_point(size = 0.5) + geom_line(size = 0.1) +  theme_bw() + theme(legend.title = element_blank()) + labs(title = " Mean weekly count v.s week 2016-2018", x = "week", y = "Rider count")
+
+time.g
+
+```
+```{r}
+#number of cyclists v.s rain
+
+allrain$week <- week(allrain$Date)
+
+seventeen <- (year(allrain$Date) == 2017)
+allrain$week[seventeen] <- allrain$week[seventeen] + 52
+eightteen <- (year(allrain$Date) == 2018)
+allrain$week[eightteen] <- allrain$week[eightteen] + 104
+
+rain.rain <- aggregate(`Amount(mm)` ~ week + year(Date), data = allrain, mean)
+names(rain.rain) <- c("week","year", "amount")
+rain.rain <- rain.rain[c(-160),]
+rain.g <- ggplot(data = rain.rain, aes(y = amount, x = week, colour = as.factor(year))) + geom_point(size = 0.5) + geom_line(size = 0.1) +  theme_bw() + theme(legend.title = element_blank()) + labs(title = " Mean weekly count v.s rain 2016-2018", x = "week", y = "Amount of rain")
+
+
+grid.arrange(time.g, rain.g)
+```
+
+```{r}
+#number of cyclists v.s dayW
+
+#first lets classify each date to its corresponding day
+allbikes$DayW <- wday(allbikes$Date, label = TRUE, abbr = FALSE)
+day.bikes <- aggregate(rider_count ~ counter_edited + DayW, data = allbikes, mean)
+
+day.g <- ggplot(data = day.bikes) +  
+geom_bar(mapping = aes(y = rider_count, x = counter_edited, fill = as.factor(DayW)) , stat = "identity") + theme_bw() + theme(axis.text.x=element_text(angle=-90,size = 5),legend.position = "none") + labs(title = " Mean count v.s Area per dayW", x = "Counter area", y = "Rider count")
+
+
+day.bikes2 <- aggregate(rider_count ~ DayW, data = allbikes, mean)
+day.g2 <- ggplot(data = day.bikes2) +  
+geom_point(mapping = aes(y = rider_count, x = as.factor(DayW), color = as.factor(DayW))) + theme_bw() + theme(axis.text.x=element_text(angle=-90),legend.title = element_blank()) + labs(title = " Mean rider count v.s dayW", x = "Day", y = "Rider count")
+
+
+grid.arrange(day.g, day.g2, ncol = 4 , nrow = 3, widths = c(10, 7, 10,10), 
+             layout_matrix = rbind(c(1, 1, 2,2),
+                                   c(1, 1,NA, NA)))
+```
+
+
+```{r}
+#number of cyclists v.s season
+
+#first lets classify each month to its corresponding season
+temp.date <- as.Date(cut(as.Date(allbikes$Date, "%Y/%m/%d"), "month")) + 32
+allbikes$Season <- factor(quarters(temp.date), levels = c("Q1", "Q2", "Q3", "Q4"), 
+   labels = c("summer" , "autumn", "winter", "spring" ))
+season.bikes <- aggregate(rider_count ~ counter_edited + Season, data = allbikes, mean)
+
+
+season.g <- ggplot(data = season.bikes, aes(y = rider_count, x= counter_edited, color = as.factor(Season))) + geom_point( ) + facet_grid(rows = as.factor(season.bikes$Season))  + theme_bw() + theme(axis.text.x=element_text(angle=-90), legend.position = "none") + labs(title = " Mean rider count v.s Area per Season", x = "Counter area", y = "Rider count")
+
+
+season.bikes2 <- aggregate(rider_count ~ Season, data = allbikes, mean)
+season.g2 <- ggplot(data = season.bikes2, aes(x = as.factor(Season), y = rider_count, color = as.factor(Season))) + geom_point(aes(size = 1))+ theme_bw() + labs(title = " Mean rider count v.s Season", x = "Season", y = "rider count") + theme(legend.position = "none", plot.title = element_text(size = 9.5))
+
+
+
+grid.arrange(season.g, season.g2, ncol = 3 , nrow = 3, widths = c(10, 12, 10), 
+             layout_matrix = rbind(c(1, 1, 2),
+                                   c(1, 1,NA)))
+
+```
+
+
+
+Fit a regression model to predict the number of cyclists from year, season, day of the week, and rain. 
+
+```{r}
+#year, season and day are all accounted from the past analysis
+#rain is harder to account for rain, due to the fact that location of the rain is recorded in lat,long format and it would 
+#require to much work to match it to location in the bikes data set. to solve this I will aggregate the bikes data set along date and do the same with the rain data set and match it with aggregated bikes data set.
+
+model.data.bikes <- aggregate(rider_count ~ as.Date(Date) + DayW + Season, data = allbikes, sum)
+names(model.data.bikes) <- c("Date", "DayW", "Season", "RiderSum")
+
+model.data.rain <- aggregate(allrain$`Amount(mm)`~ allrain$Date  , data = allrain, sum)
+model.data.rain <- model.data.rain[-c(1097),]
+names(model.data.rain) <- c("Date", "Amount")
+
+model.data <- join(model.data.bikes, model.data.rain, by = NULL, type = "left", match = "all")
+model.data$Year <- year(model.data$Date)
+#NOTE: the rider count will be the sum daily count for auckland
+
+model <- lm(RiderSum ~ as.factor(Year) + as.factor(Season) + as.factor(DayW) + Amount, data = model.data)
+
+summary(model)
+confint(model)
+
+#example: year: 2017, DayW: Friday, Season: Winter, Amount: 10
+
+predCount.df <- data.frame(Year = c(2017), DayW = c("Friday"), Season = c("winter"), Amount = c(10))
+predict(model,predCount.df,interval = "prediction")
+```
+
+
+From the graph we can clearly see an increase in the amount rain decreases the number of people cycling in Auckland. This is most evident in 2016, wherein the weekly amount of rain is relativity low and the number of cyclists is relativity high at the start of the year, as we move to the mid-year the amount of weekly rain greatly increases and to reflect that the number cyclists decreases greatly, and towards the end of the year the amount of rain starts to decrease and number of cyclists increases again to repeat the same cycle next year.
+
+This behavior is confirmed by the fitted model, we see the amount of daily rain in Auckland has a p-value of 2*e^-16 i.e. it is very statistically significant, thus we can say that the for each 1 mm increase in the amount of rain the mean number of daily cyclists in Auckland decreases by between 107 and 123.  
+ 
